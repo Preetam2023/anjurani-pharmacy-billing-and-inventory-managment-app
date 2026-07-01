@@ -5,9 +5,15 @@ The Inventory, Billing, and History UI modules (Phase 4-6) will call these
 instead of writing raw SQL directly in the UI code.
 """
 
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from db.connection import get_connection
+import sqlite3
 
+def current_timestamp():
+    """
+    Local (IST) timestamp instead of SQLite's UTC CURRENT_TIMESTAMP.
+    """
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 class InsufficientStockError(Exception):
     """Raised when an invoice would reduce a medicine's stock below zero."""
@@ -16,32 +22,90 @@ class InsufficientStockError(Exception):
 
 # ---------- Medicines ----------
 
-def add_medicine(name, batch_no, expiry_date, price, stock, seller_name=None,
-                  packets=None, units_per_packet=None):
+def add_medicine(
+    name,
+    batch_no,
+    expiry_date,
+    packet_price,
+    stock,
+    seller_name=None,
+    packets=None,
+    units_per_packet=1,
+):
     conn = get_connection()
+    unit_price = packet_price / max(units_per_packet, 1)
+
     cur = conn.execute(
-        "INSERT INTO medicines (name, batch_no, expiry_date, price, stock, seller_name) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (name, batch_no, expiry_date, price, stock, seller_name),
+        """
+        INSERT INTO medicines
+    (
+        name,
+        batch_no,
+        expiry_date,
+        packet_price,
+        units_per_packet,
+        price,
+        stock,
+        seller_name
     )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """,
+    (
+        name,
+        batch_no,
+        expiry_date,
+        packet_price,
+        units_per_packet,
+        unit_price,
+        stock,
+        seller_name,
+    ),
+)
     medicine_id = cur.lastrowid
 
     # Log the initial stock as the first stock_history entry, so "when was
     # this received / from whom" has an answer from day one, not just from
     # the next restock onward.
     if stock and stock > 0:
-        conn.execute(
-            "INSERT INTO stock_history "
-            "(medicine_id, medicine_name, batch_no, seller_name, packets, units_per_packet, quantity_added) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (medicine_id, name, batch_no, seller_name, packets, units_per_packet, stock),
-        )
+        purchase_cost = packet_price * (packets or 0)
 
+        conn.execute(
+            """
+        INSERT INTO stock_history
+        (
+            medicine_id,
+            medicine_name,
+            batch_no,
+            seller_name,
+            packet_price,
+            packets,
+            units_per_packet,
+            purchase_cost,
+            quantity_added,
+            received_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            medicine_id,
+            name,
+            batch_no,
+            seller_name,
+            packet_price,
+            packets,
+            units_per_packet,
+            purchase_cost,
+            stock,
+            current_timestamp(),
+        ),
+    )
     conn.commit()
     return medicine_id
 
 
-def update_medicine(medicine_id, name=None, batch_no=None, expiry_date=None, price=None, seller_name=None):
+def update_medicine(medicine_id, name=None, batch_no=None, expiry_date=None, packet_price=None,
+units_per_packet=None,
+stock=None,seller_name=None):
     """Update only the fields provided. Stock changes go through add_stock()."""
     conn = get_connection()
     fields, values = [], []
@@ -51,8 +115,39 @@ def update_medicine(medicine_id, name=None, batch_no=None, expiry_date=None, pri
         fields.append("batch_no = ?"); values.append(batch_no)
     if expiry_date is not None:
         fields.append("expiry_date = ?"); values.append(expiry_date)
-    if price is not None:
-        fields.append("price = ?"); values.append(price)
+    if packet_price is not None:
+        if units_per_packet is None:
+
+            row = conn.execute(
+                "SELECT units_per_packet FROM medicines WHERE id=?",
+                (medicine_id,),
+            ).fetchone()
+
+            units_per_packet = row["units_per_packet"]
+
+        unit_price = packet_price / max(units_per_packet, 1)
+
+        fields.append("packet_price = ?")
+        values.append(packet_price)
+
+        fields.append("price = ?")
+        values.append(unit_price)
+    elif units_per_packet is not None:
+        row = conn.execute(
+            "SELECT packet_price FROM medicines WHERE id=?",
+            (medicine_id,),
+        ).fetchone()
+
+        unit_price = row["packet_price"] / max(units_per_packet, 1)
+
+        fields.append("price = ?")
+        values.append(unit_price)
+    if units_per_packet is not None:
+        fields.append("units_per_packet = ?")
+        values.append(units_per_packet)
+    if stock is not None:
+        fields.append("stock = ?")
+        values.append(stock)
     if seller_name is not None:
         fields.append("seller_name = ?"); values.append(seller_name)
     if not fields:
@@ -62,8 +157,15 @@ def update_medicine(medicine_id, name=None, batch_no=None, expiry_date=None, pri
     conn.commit()
 
 
-def add_stock(medicine_id, quantity, seller_name=None, batch_no=None,
-              packets=None, units_per_packet=None):
+def add_stock(
+    medicine_id,
+    quantity,
+    packet_price=None,
+    seller_name=None,
+    batch_no=None,
+    packets=None,
+    units_per_packet=None,
+):
     """
     Increase stock and log a stock_history entry for inventory tracking.
     If seller_name is given, it also becomes the medicine's "current"
@@ -72,7 +174,15 @@ def add_stock(medicine_id, quantity, seller_name=None, batch_no=None,
     """
     conn = get_connection()
     medicine = conn.execute(
-        "SELECT name, batch_no FROM medicines WHERE id = ?", (medicine_id,)
+    """
+    SELECT
+        name,
+        batch_no,
+        packet_price,
+        units_per_packet
+    FROM medicines
+    WHERE id=?
+    """, (medicine_id,)
     ).fetchone()
 
     conn.execute(
@@ -84,32 +194,99 @@ def add_stock(medicine_id, quantity, seller_name=None, batch_no=None,
             "UPDATE medicines SET seller_name = ? WHERE id = ?",
             (seller_name, medicine_id),
         )
+    if packet_price is not None:
+        unit_price = packet_price / max(units_per_packet or 1, 1)
 
-    if quantity and quantity > 0 and medicine is not None:
         conn.execute(
-            "INSERT INTO stock_history "
-            "(medicine_id, medicine_name, batch_no, seller_name, packets, units_per_packet, quantity_added) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (medicine_id, medicine["name"], batch_no or medicine["batch_no"],
-             seller_name, packets, units_per_packet, quantity),
+            """
+        UPDATE medicines
+        SET
+            packet_price = ?,
+            units_per_packet = ?,
+            price = ?
+        WHERE id = ?
+        """,
+            (
+            packet_price,
+            units_per_packet,
+            unit_price,
+            medicine_id,
+            ),
         )
+    if quantity and quantity > 0 and medicine is not None:
+        purchase_cost = (packet_price or medicine["packet_price"]) * (packets or 0)
+
+        conn.execute(
+            """
+        INSERT INTO stock_history
+        (
+            medicine_id,
+            medicine_name,
+            batch_no,
+            seller_name,
+            packet_price,
+            packets,
+            units_per_packet,
+            purchase_cost,
+            quantity_added,
+            received_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            medicine_id,
+            medicine["name"],
+            batch_no or medicine["batch_no"],
+            seller_name,
+            packet_price or medicine["packet_price"],
+            packets,
+            units_per_packet,
+            purchase_cost,
+            quantity,
+            current_timestamp(),
+        ),
+    )
 
     conn.commit()
+
 
 
 def delete_medicine(medicine_id):
-    """Only allowed when stock is 0 — enforced here, not just in the UI."""
     conn = get_connection()
-    row = conn.execute(
-        "SELECT stock FROM medicines WHERE id = ?", (medicine_id,)
+
+    # Check if this medicine has ever been sold
+    used = conn.execute(
+        """
+        SELECT 1
+        FROM invoice_items
+        WHERE medicine_id = ?
+        LIMIT 1
+        """,
+        (medicine_id,)
     ).fetchone()
-    if row is None:
+
+    if used:
         return False
-    if row["stock"] != 0:
-        return False
-    conn.execute("DELETE FROM medicines WHERE id = ?", (medicine_id,))
-    conn.commit()
-    return True
+
+    try:
+        # Remove stock history first
+        conn.execute(
+            "DELETE FROM stock_history WHERE medicine_id = ?",
+            (medicine_id,)
+        )
+
+        # Now remove the medicine
+        conn.execute(
+            "DELETE FROM medicines WHERE id = ?",
+            (medicine_id,)
+        )
+
+        conn.commit()
+        return True
+
+    except sqlite3.Error:
+        conn.rollback()
+        raise
 
 
 def get_medicine_by_id(medicine_id):
@@ -260,20 +437,32 @@ def create_invoice(invoice_no, subtotal, discount_percent, grand_total, items, c
                     f"are in stock (requested {item['quantity']})."
                 )
 
+        invoice_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         cur = conn.execute(
-            "INSERT INTO invoices (invoice_no, customer_id, subtotal, discount_percent, grand_total) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (invoice_no, customer_id, subtotal, discount_percent, grand_total),
+            """
+            INSERT INTO invoices
+            (invoice_no, invoice_date, customer_id, subtotal, discount_percent, grand_total)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                invoice_no,
+                invoice_date,
+                customer_id,
+                subtotal,
+                discount_percent,
+                grand_total,
+            ),
         )
         invoice_id = cur.lastrowid
 
         for item in items:
             conn.execute(
                 "INSERT INTO invoice_items "
-                "(invoice_id, medicine_id, batch_no, quantity, unit_price, total_price) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (invoice_id, item["medicine_id"], item.get("batch_no"), item["quantity"],
-                 item["unit_price"], item["total_price"]),
+                "(invoice_id, medicine_id, batch_no, expiry_date, quantity, unit_price, total_price) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (invoice_id, item["medicine_id"], item.get("batch_no"), item.get("expiry_date"),
+                 item["quantity"], item["unit_price"], item["total_price"]),
             )
             conn.execute(
                 "UPDATE medicines SET stock = stock - ? WHERE id = ?",
@@ -354,7 +543,8 @@ def search_invoices(invoice_no=None, target_date=None):
 def get_invoice_items(invoice_id):
     conn = get_connection()
     return conn.execute(
-        "SELECT invoice_items.*, medicines.name AS medicine_name "
+        "SELECT invoice_items.*, medicines.name AS medicine_name, "
+        "medicines.expiry_date AS medicine_expiry_date "
         "FROM invoice_items "
         "JOIN medicines ON medicines.id = invoice_items.medicine_id "
         "WHERE invoice_id = ?",
@@ -458,7 +648,7 @@ def get_today_summary():
         (today,),
     ).fetchone()
     inventory_value_row = conn.execute(
-        "SELECT COALESCE(SUM(price * stock), 0) AS inventory_value FROM medicines"
+        "SELECT COALESCE(SUM(packet_price * (stock * 1.0 / units_per_packet)),0) AS inventory_value FROM medicines"
     ).fetchone()
     return {
         "bills_today": row["bill_count"],

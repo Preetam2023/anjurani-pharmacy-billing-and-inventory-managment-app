@@ -13,11 +13,33 @@ QWidget {
     background-color: #1e2a38;
 }
 
-#sidebarTitle {
-    color: #ffffff;
-    font-size: 20px;
-    font-weight: 600;
-    padding: 10px 0;
+#sidebarSubtitle{
+
+color:#b7c5d4;
+
+font-size:13px;
+
+padding-bottom:20px;
+
+}
+
+#sidebarTitle
+{
+    color: white;
+    font-size: 24px;
+    font-weight: 800;
+    font-family: "Segoe UI";
+    letter-spacing: 1px;
+}
+
+#sidebarSubtitle
+{
+    color: #DCE6F2;
+    font-size: 24px;
+    font-weight: 800;
+    font-family: "Segoe UI";
+    letter-spacing: 1px;
+    margin-top: -8px;
 }
 
 QStackedWidget {
@@ -54,25 +76,40 @@ QPushButton:disabled {
     color: #64748b;
 }
 
-QPushButton#navButton {
-    background-color: transparent;
-    border-radius: 0px;
-    color: #b8c2cc;
-    text-align: left;
-    padding: 12px 24px;
-    font-size: 14px;
-    font-weight: normal;
+QPushButton#navButton{
+
+background:transparent;
+
+border-radius:10px;
+
+margin:4px 10px;
+
+padding:12px 16px;
+
+text-align:left;
+
+font-size:14px;
+
+font-weight:600;
+
+color:#cbd5e1;
+
 }
 
-QPushButton#navButton:hover {
-    background-color: #2a3a4d;
-    color: #ffffff;
+QPushButton#navButton:hover{
+
+background:#31455c;
+
+color:white;
+
 }
 
-QPushButton#navButton:checked {
-    background-color: #3b82f6;
-    color: #ffffff;
-    font-weight: 600;
+QPushButton#navButton:checked{
+
+background:#2563eb;
+
+color:white;
+
 }
 
 QPushButton#dangerButton {
@@ -143,5 +180,33 @@ QTableWidget::item {
 QTableWidget::item:selected {
     background-color: #dbeafe;
     color: #1e293b;
+}
+
+QToolButton{
+
+background:transparent;
+
+color:#cbd5e1;
+
+padding:12px;
+
+border-radius:10px;
+
+margin:10px;
+
+text-align:left;
+
+font-size:14px;
+
+font-weight:600;
+
+}
+
+QToolButton:hover{
+
+background:#31455c;
+
+color:white;
+
 }
 """

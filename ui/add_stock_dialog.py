@@ -14,8 +14,14 @@ possible in Stock History.
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QFormLayout, QLabel, QDialogButtonBox, QHBoxLayout,
-    QComboBox, QCompleter,
+    QDialog,
+    QFormLayout,
+    QLabel,
+    QDialogButtonBox,
+    QHBoxLayout,
+    QComboBox,
+    QCompleter,
+    QDoubleSpinBox,
 )
 
 from db import queries
@@ -33,7 +39,14 @@ class AddStockDialog(QDialog):
 
         self.current_label = QLabel(str(medicine["stock"]))
         layout.addRow("Current Stock", self.current_label)
+        self.packet_price_input = QDoubleSpinBox()
+        self.packet_price_input.setRange(0, 100000)
+        self.packet_price_input.setDecimals(2)
+        self.packet_price_input.setPrefix("₹ ")
+        self.packet_price_input.setValue(medicine["packet_price"])
+        self.packet_price_input.valueChanged.connect(self.update_preview)
 
+        layout.addRow("Packet Price", self.packet_price_input)
         self.packets_input = SelectAllSpinBox()
         self.packets_input.setRange(1, 100_000)
         self.packets_input.setValue(1)
@@ -63,10 +76,18 @@ class AddStockDialog(QDialog):
         # often who's restocking it — easy to change if this delivery
         # came from someone else.
         self.seller_input.setCurrentText(medicine["seller_name"] or "")
-        layout.addRow("Received From (Seller)", self.seller_input)
+        layout.addRow("Supplier (Optional)", self.seller_input)
 
-        self.preview_label = QLabel()
-        self.preview_label.setStyleSheet("font-weight: 600;")
+        self.received_units_label = QLabel("0")
+        self.received_units_label.setStyleSheet("font-weight:600;")
+        layout.addRow("Received Units", self.received_units_label)
+
+        self.purchase_cost_label = QLabel("₹0.00")
+        self.purchase_cost_label.setStyleSheet("font-weight:600;")
+        layout.addRow("Purchase Cost", self.purchase_cost_label)
+
+        self.preview_label = QLabel("0")
+        self.preview_label.setStyleSheet("font-weight:600;")
         layout.addRow("Updated Stock", self.preview_label)
         self.update_preview()
 
@@ -78,17 +99,22 @@ class AddStockDialog(QDialog):
         layout.addRow(buttons)
 
     def update_preview(self):
-        """
-        Reads the spinboxes' literal text instead of trusting .value()
-        mid-edit — see the matching note in medicine_form_dialog.py for
-        why that matters (it's what was causing the wrong-number-while-
-        backspacing bug).
-        """
         packets_text = self.packets_input.lineEdit().text().strip()
         units_text = self.units_per_packet_input.lineEdit().text().strip()
+
         packets = int(packets_text) if packets_text.isdigit() else 0
         units = int(units_text) if units_text.isdigit() else 0
-        new_total = self.medicine["stock"] + (packets * units)
+
+        received_units = packets * units
+
+        self.received_units_label.setText(str(received_units))
+
+        purchase_cost = packets * self.packet_price_input.value()
+
+        self.purchase_cost_label.setText(f"₹{purchase_cost:.2f}")
+
+        new_total = self.medicine["stock"] + received_units
+
         self.preview_label.setText(str(new_total))
 
     def get_quantity(self):
@@ -107,3 +133,6 @@ class AddStockDialog(QDialog):
 
     def get_seller_name(self):
         return self.seller_input.currentText().strip()
+    
+    def get_packet_price(self):
+        return self.packet_price_input.value()

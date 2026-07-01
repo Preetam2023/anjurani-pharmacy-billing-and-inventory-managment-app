@@ -5,12 +5,15 @@ generate the invoice (saves it, reduces stock, and writes a PDF receipt).
 """
 
 from datetime import datetime
-
+import os
+import sys
+import subprocess
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit, QPushButton,
     QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView,
-    QSpinBox, QDoubleSpinBox, QMessageBox, QFrame, QScrollArea,
+    QSpinBox, QDoubleSpinBox, QMessageBox, QFrame, QScrollArea, QDialog,
+    QDialogButtonBox,
 )
 
 from db import queries
@@ -19,6 +22,52 @@ from logic.billing import calculate_line_total, calculate_subtotal, calculate_gr
 from reports.invoice_pdf import generate_invoice_pdf
 from ui.customer_dialog import CustomerDialog
 
+class BillSavedDialog(QDialog):
+    def __init__(self, parent, invoice_no, grand_total):
+        super().__init__(parent)
+
+        self.print_clicked = False
+
+        self.setWindowTitle("Bill Saved")
+        self.setMinimumWidth(380)
+
+        layout = QVBoxLayout(self)
+
+        title = QLabel("✔ Bill Saved Successfully")
+        title.setStyleSheet(
+            "font-size:16px;"
+            "font-weight:700;"
+            "color:#15803d;"
+        )
+        layout.addWidget(title)
+
+        layout.addSpacing(10)
+
+        layout.addWidget(QLabel(f"Invoice : {invoice_no}"))
+        layout.addWidget(QLabel(f"Total : ₹{grand_total:.2f}"))
+
+        layout.addSpacing(15)
+
+        buttons = QDialogButtonBox()
+
+        print_btn = buttons.addButton(
+            "Print Receipt",
+            QDialogButtonBox.ButtonRole.AcceptRole,
+        )
+
+        close_btn = buttons.addButton(
+            "Close",
+            QDialogButtonBox.ButtonRole.RejectRole,
+        )
+
+        print_btn.clicked.connect(self.print_bill)
+        close_btn.clicked.connect(self.reject)
+
+        layout.addWidget(buttons)
+
+    def print_bill(self):
+        self.print_clicked = True
+        self.accept()
 
 class BillingScreen(QWidget):
     SEARCH_DEBOUNCE_MS = 250
@@ -68,8 +117,8 @@ class BillingScreen(QWidget):
         self.search_timer.timeout.connect(self.perform_search)
 
         self.results_table = QTableWidget()
-        self.results_table.setColumnCount(4)
-        self.results_table.setHorizontalHeaderLabels(["Name", "Batch No", "Price", "Stock"])
+        self.results_table.setColumnCount(5)
+        self.results_table.setHorizontalHeaderLabels(["Name", "Batch No", "Exp. Date", "Price", "Stock"])
         self.results_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.results_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.results_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -79,6 +128,7 @@ class BillingScreen(QWidget):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.results_table.doubleClicked.connect(self.add_selected_to_cart)
         layout.addWidget(self.results_table)
 
@@ -127,6 +177,15 @@ class BillingScreen(QWidget):
         # restart the timer on every keystroke — only the last pause fires a query
         self.search_timer.start(self.SEARCH_DEBOUNCE_MS)
 
+    @staticmethod
+    def format_expiry(iso_date):
+        if not iso_date:
+            return "—"
+        try:
+            return datetime.strptime(iso_date, "%Y-%m-%d").strftime("%d-%b-%Y")
+        except ValueError:
+            return iso_date
+
     def perform_search(self):
         query = self.search_input.text().strip()
         self.results_table.setRowCount(0)
@@ -140,8 +199,9 @@ class BillingScreen(QWidget):
             name_item.setData(Qt.ItemDataRole.UserRole, med["id"])
             self.results_table.setItem(row_index, 0, name_item)
             self.results_table.setItem(row_index, 1, QTableWidgetItem(med["batch_no"]))
-            self.results_table.setItem(row_index, 2, QTableWidgetItem(f"₹{med['price']:.2f}"))
-            self.results_table.setItem(row_index, 3, QTableWidgetItem(str(med["stock"])))
+            self.results_table.setItem(row_index, 2, QTableWidgetItem(self.format_expiry(med["expiry_date"])))
+            self.results_table.setItem(row_index, 3, QTableWidgetItem(f"₹{med['price']:.2f}"))
+            self.results_table.setItem(row_index, 4, QTableWidgetItem(str(med["stock"])))
 
     def add_selected_to_cart(self):
         row = self.results_table.currentRow()
@@ -173,6 +233,7 @@ class BillingScreen(QWidget):
             self.cart[medicine_id] = {
                 "name": medicine["name"],
                 "batch_no": medicine["batch_no"],
+                "expiry_date": medicine["expiry_date"],
                 "unit_price": medicine["price"],
                 "stock": medicine["stock"],
                 "quantity": 1,
@@ -201,8 +262,9 @@ class BillingScreen(QWidget):
         name_item.setData(Qt.ItemDataRole.UserRole, medicine["id"])
         self.results_table.setItem(0, 0, name_item)
         self.results_table.setItem(0, 1, QTableWidgetItem(medicine["batch_no"]))
-        self.results_table.setItem(0, 2, QTableWidgetItem(f"₹{medicine['price']:.2f}"))
-        self.results_table.setItem(0, 3, QTableWidgetItem(str(medicine["stock"])))
+        self.results_table.setItem(0, 2, QTableWidgetItem(self.format_expiry(medicine["expiry_date"])))
+        self.results_table.setItem(0, 3, QTableWidgetItem(f"₹{medicine['price']:.2f}"))
+        self.results_table.setItem(0, 4, QTableWidgetItem(str(medicine["stock"])))
         self.results_table.selectRow(0)
 
     # ---------- Cart panel ----------
@@ -317,7 +379,28 @@ class BillingScreen(QWidget):
         self.generate_btn.setEnabled(len(self.cart) > 0)
 
     # ---------- Generate bill ----------
+    def open_pdf(self, pdf_path):
+        """
+        Open the generated PDF using the system's default PDF viewer.
+        """
 
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(pdf_path)
+
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", pdf_path])
+
+            else:
+                subprocess.Popen(["xdg-open", pdf_path])
+
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Unable to Open PDF",
+                str(e),
+            )
+            
     def handle_generate_bill(self):
         if not self.cart:
             return
@@ -341,6 +424,7 @@ class BillingScreen(QWidget):
             {
                 "medicine_id": medicine_id,
                 "batch_no": line["batch_no"],
+                "expiry_date": line.get("expiry_date"),
                 "quantity": line["quantity"],
                 "unit_price": line["unit_price"],
                 "total_price": calculate_line_total(line["unit_price"], line["quantity"]),
@@ -365,33 +449,41 @@ class BillingScreen(QWidget):
 
         # build the PDF using the cart's display data (name, batch_no aren't
         # needed by the db layer, but they belong on the printed invoice)
-        pdf_items = [
-            {
-                "name": line["name"],
-                "batch_no": line["batch_no"],
-                "quantity": line["quantity"],
-                "unit_price": line["unit_price"],
-                "total_price": calculate_line_total(line["unit_price"], line["quantity"]),
-            }
-            for line in self.cart.values()
-        ]
-        pdf_path = generate_invoice_pdf(
-            invoice_no=invoice_no,
-            invoice_date=datetime.now().strftime("%d-%b-%Y %H:%M"),
-            items=pdf_items,
-            subtotal=subtotal,
-            discount_percent=discount_percent,
-            grand_total=grand_total,
-            customer_name=customer_values["name"] or None,
-            customer_phone=customer_values["phone"] or None,
+        dialog = BillSavedDialog(
+            self,
+            invoice_no,
+            grand_total,
         )
 
-        QMessageBox.information(
-            self, "Bill Generated",
-            f"Invoice {invoice_no} created successfully.\n"
-            f"Total: ₹{grand_total:.2f}\n\n"
-            f"PDF saved to:\n{pdf_path}",
-        )
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.print_clicked:
+
+            pdf_items = [
+                {
+                    "name": line["name"],
+                    "batch_no": line["batch_no"],
+                    "expiry_date": self.format_expiry(line.get("expiry_date")),
+                    "quantity": line["quantity"],
+                    "unit_price": line["unit_price"],
+                    "total_price": calculate_line_total(
+                    line["unit_price"],
+                    line["quantity"],
+                    ),
+                }
+                for line in self.cart.values()
+            ]
+
+            pdf_path = generate_invoice_pdf(
+                invoice_no=invoice_no,
+                invoice_date=datetime.now().strftime("%d-%b-%Y %H:%M"),
+                items=pdf_items,
+                subtotal=subtotal,
+                discount_percent=discount_percent,
+                grand_total=grand_total,
+                customer_name=customer_values["name"] or None,
+                customer_phone=customer_values["phone"] or None,
+            )
+
+            self.open_pdf(pdf_path)
 
         self.cart.clear()
         self.discount_input.setValue(0)

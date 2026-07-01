@@ -9,8 +9,9 @@ keeps the app feeling fast under real use.
 
 import sqlite3
 import os
+from logic.config import DATABASE_PATH
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "medical_store.db")
+DB_PATH = DATABASE_PATH
 
 _connection = None
 

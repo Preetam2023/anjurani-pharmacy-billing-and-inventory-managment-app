@@ -76,10 +76,19 @@ class InventoryScreen(QWidget):
         layout.addLayout(header_row)
 
         legend = QLabel(
-            "🔴 Expired &nbsp;&nbsp; 🟡 Expiring within 90 days &nbsp;&nbsp; "
-            "Red stock value = low stock (below 20)"
-        )
-        legend.setStyleSheet("color: #6b7785; font-size: 11px;")
+    "<span style='color:#dc2626; font-size:16px;'>●</span> <span style='font-size:15px;'>Expired</span>"
+    "&nbsp;&nbsp;&nbsp;&nbsp;"
+    "<span style='color:#f59e0b; font-size:16px;'>●</span> <span style='font-size:15px;'>Expiring within 90 days</span>"
+    "&nbsp;&nbsp;&nbsp;&nbsp;"
+    "<span style='color:#dc2626; font-size:15px;'>Stock value in red = Low Stock (&lt;20)</span>"
+)
+
+        legend.setStyleSheet("""
+QLabel{
+    color:#4b5563;
+    padding:4px 0px;
+}
+""")
         layout.addWidget(legend)
 
         self.search_input = QLineEdit()
@@ -191,7 +200,7 @@ class InventoryScreen(QWidget):
         if not iso_date:
             return "—"
         try:
-            return datetime.strptime(iso_date, "%Y-%m-%d").strftime("%d-%b-%Y")
+            return datetime.strptime(iso_date, "%Y-%m-%d").strftime("%b-%Y")
         except ValueError:
             return iso_date
 
@@ -209,7 +218,7 @@ class InventoryScreen(QWidget):
         has_selection = medicine is not None
         self.edit_btn.setEnabled(has_selection)
         self.add_stock_btn.setEnabled(has_selection)
-        self.delete_btn.setEnabled(has_selection and medicine["stock"] == 0)
+        self.delete_btn.setEnabled(has_selection)
 
     # ---------- Actions ----------
 
@@ -219,7 +228,7 @@ class InventoryScreen(QWidget):
             values = dialog.get_values()
             queries.add_medicine(
                 values["name"], values["batch_no"], values["expiry_date"],
-                values["price"], values["stock"], values["seller_name"],
+                values["packet_price"], values["stock"], values["seller_name"],
                 packets=values.get("packets"), units_per_packet=values.get("units_per_packet"),
             )
             self.load_data()
@@ -233,7 +242,7 @@ class InventoryScreen(QWidget):
             values = dialog.get_values()
             queries.update_medicine(
                 medicine["id"], name=values["name"], batch_no=values["batch_no"],
-                expiry_date=values["expiry_date"], price=values["price"],
+                expiry_date=values["expiry_date"], packet_price=values["packet_price"],stock=values["stock"],
                 seller_name=values["seller_name"],
             )
             self.load_data()
@@ -245,10 +254,14 @@ class InventoryScreen(QWidget):
         dialog = AddStockDialog(self, medicine=medicine)
         if dialog.exec():
             queries.add_stock(
-                medicine["id"], dialog.get_quantity(),
-                seller_name=dialog.get_seller_name(), batch_no=medicine["batch_no"],
-                packets=dialog.get_packets(), units_per_packet=dialog.get_units_per_packet(),
-            )
+    medicine["id"],
+    dialog.get_quantity(),
+    packet_price=dialog.get_packet_price(),
+    seller_name=dialog.get_seller_name(),
+    batch_no=medicine["batch_no"],
+    packets=dialog.get_packets(),
+    units_per_packet=dialog.get_units_per_packet(),
+)
             self.load_data()
 
     def handle_stock_history(self):
@@ -259,16 +272,21 @@ class InventoryScreen(QWidget):
         medicine = self.get_selected_medicine()
         if medicine is None:
             return
-        if medicine["stock"] != 0:
-            QMessageBox.warning(
-                self, "Cannot Delete",
-                "Stock must be 0 before this medicine can be deleted.",
-            )
-            return
         confirm = QMessageBox.question(
             self, "Confirm Delete",
             f"Delete '{medicine['name']}' (batch {medicine['batch_no']})?\nThis cannot be undone.",
         )
         if confirm == QMessageBox.StandardButton.Yes:
-            queries.delete_medicine(medicine["id"])
-            self.load_data()
+            deleted = queries.delete_medicine(medicine["id"])
+
+            if deleted:
+                self.load_data()
+            else:
+                QMessageBox.warning(
+                    self,
+        "Cannot Delete",
+        "This medicine has already been used in invoices or stock history.\n\n"
+        "For audit purposes it cannot be deleted."
+        "Only medicines that have never been sold can be removed."
+
+    )

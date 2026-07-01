@@ -31,9 +31,9 @@ class StockHistoryDialog(QDialog):
         layout.addLayout(self.build_filter_row())
 
         self.table = QTableWidget()
-        self.table.setColumnCount(7)
+        self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels(
-            ["Received On", "Medicine", "Batch No", "Seller", "Packets", "Units/Packet", "Total Qty"]
+            ["Received On", "Medicine", "Batch No", "Seller", "Packets", "Units/Packet", "Total Qty","Inventory Cost",]
         )
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -47,6 +47,7 @@ class StockHistoryDialog(QDialog):
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
         layout.addWidget(self.table)
 
         self.summary_label = QLabel("")
@@ -138,6 +139,7 @@ class StockHistoryDialog(QDialog):
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(rows))
         total_qty = 0
+        total_cost = 0
 
         for row_index, entry in enumerate(rows):
             self.table.setItem(row_index, 0, QTableWidgetItem(self.format_datetime(entry["received_at"])))
@@ -147,10 +149,13 @@ class StockHistoryDialog(QDialog):
             self.table.setItem(row_index, 4, QTableWidgetItem(str(entry["packets"]) if entry["packets"] else "—"))
             self.table.setItem(row_index, 5, QTableWidgetItem(str(entry["units_per_packet"]) if entry["units_per_packet"] else "—"))
             self.table.setItem(row_index, 6, QTableWidgetItem(str(entry["quantity_added"])))
-            total_qty += entry["quantity_added"]
+            cost = entry["purchase_cost"] or 0
 
+            self.table.setItem(row_index,7,QTableWidgetItem(f"₹ {cost:.2f}"))
+            total_qty += entry["quantity_added"]
+            total_cost += cost
         self.table.setSortingEnabled(True)
-        self.summary_label.setText(f"{len(rows)} receipt(s) — {total_qty} total unit(s) received")
+        self.summary_label.setText(f"{len(rows)} receipt(s) — " f"{total_qty} unit(s) received — " f"₹ {total_cost:.2f} purchased")
 
     @staticmethod
     def format_datetime(value):

@@ -16,9 +16,9 @@ of 10 tablets = 150 total) rather than one raw number, since that's how
 stock actually arrives and is far less error-prone to enter or verify.
 """
 
-from PySide6.QtCore import Qt, QDate
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QFormLayout, QLineEdit, QDateEdit, QDoubleSpinBox,
+    QDialog, QFormLayout, QLineEdit, QDoubleSpinBox,
     QComboBox, QCompleter, QDialogButtonBox, QLabel, QMessageBox, QHBoxLayout,
 )
 
@@ -38,15 +38,17 @@ class MedicineFormDialog(QDialog):
         self.name_input = QLineEdit()
         self.batch_input = QLineEdit()
 
-        self.expiry_input = QDateEdit()
-        self.expiry_input.setCalendarPopup(True)
-        self.expiry_input.setDisplayFormat("dd-MM-yyyy")
-        self.expiry_input.setDate(QDate.currentDate().addYears(1))
+        self.expiry_input = QLineEdit()
+        self.expiry_input.setInputMask("99/99")
+        self.expiry_input.setPlaceholderText("MM/YY")
+        self.expiry_input.setMaxLength(5)
 
-        self.price_input = QDoubleSpinBox()
-        self.price_input.setRange(0, 1_000_000)
-        self.price_input.setDecimals(2)
-        self.price_input.setPrefix("₹ ")
+        self.packet_price_input = QDoubleSpinBox()
+        self.packet_price_input.setRange(0, 100000)
+        self.packet_price_input.setDecimals(2)
+        self.packet_price_input.setPrefix("₹ ")
+
+        self.packet_price_input.valueChanged.connect(self.update_stock_preview)
 
         self.seller_input = QComboBox()
         self.seller_input.setEditable(True)
@@ -58,10 +60,10 @@ class MedicineFormDialog(QDialog):
         self.seller_input.setCompleter(completer)
 
         layout.addRow("Medicine Name", self.name_input)
-        layout.addRow("Batch Number", self.batch_input)
-        layout.addRow("Expiry Date", self.expiry_input)
-        layout.addRow("Price", self.price_input)
-        layout.addRow("Seller / Distributor", self.seller_input)
+        layout.addRow("Batch Number (Optional)", self.batch_input)
+        layout.addRow("Expiry (MM/YY) (Optional)", self.expiry_input)
+        layout.addRow("Packet Price", self.packet_price_input)
+        layout.addRow("Seller / Distributor (Optional)", self.seller_input)
 
         if medicine is None:
             self.packets_input = SelectAllSpinBox()
@@ -84,24 +86,41 @@ class MedicineFormDialog(QDialog):
             self.total_stock_label = QLabel("0")
             self.total_stock_label.setStyleSheet("font-weight: 600;")
             layout.addRow("Total Stock", self.total_stock_label)
+            
+            
+            self.unit_price_label = QLabel("₹0.00")
+            self.unit_price_label.setStyleSheet("font-weight:600;")
+
+            layout.addRow("Unit Price", self.unit_price_label)
+
+            self.inventory_cost_label = QLabel("₹0.00")
+            self.inventory_cost_label.setStyleSheet("font-weight:600;")
+
+            layout.addRow("Inventory Cost", self.inventory_cost_label)
             self.update_stock_preview()
 
             # Default to whichever seller was used last — saves retyping
             # the same distributor name for every item in a delivery.
             self.seller_input.setCurrentText(queries.get_last_used_seller())
         else:
+            self.stock_input = SelectAllSpinBox()
+            self.stock_input.setRange(0, 1000000)
+            self.stock_input.setValue(medicine["stock"])
+
+            layout.addRow("Current Stock", self.stock_input)
+
             self.packets_input = None
             self.units_per_packet_input = None
-            stock_note = QLabel(f"{medicine['stock']}  (use \"Add Stock\" to change this)")
-            layout.addRow("Current Stock", stock_note)
 
             self.name_input.setText(medicine["name"])
-            self.batch_input.setText(medicine["batch_no"])
-            self.price_input.setValue(medicine["price"])
+            self.batch_input.setText(medicine["batch_no"] or "")
+            self.packet_price_input.setValue(medicine["packet_price"])
             self.seller_input.setCurrentText(medicine["seller_name"] or "")
             if medicine["expiry_date"]:
-                year, month, day = map(int, medicine["expiry_date"].split("-"))
-                self.expiry_input.setDate(QDate(year, month, day))
+                year, month, _ = medicine["expiry_date"].split("-")
+                self.expiry_input.setText(f"{month}/{year[2:]}")
+            else:
+                self.expiry_input.setText("")
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -111,47 +130,89 @@ class MedicineFormDialog(QDialog):
         layout.addRow(buttons)
 
     def update_stock_preview(self):
-        """
-        Reads the spinboxes' literal displayed text rather than relying on
-        .value() while the user is still typing. QSpinBox.value() can
-        briefly report a stale/clamped number mid-edit (most noticeably
-        right after a full Backspace, just before new digits are typed),
-        which is exactly the kind of glitch that made the old single
-        "stock" field look like it was calculating wrong. Reading the
-        text directly (treating an empty/partial field as 0) means the
-        preview is always honest about the current input, never stale.
-        """
+        if self.packets_input is None:
+            return
         packets_text = self.packets_input.lineEdit().text().strip()
         units_text = self.units_per_packet_input.lineEdit().text().strip()
+
         packets = int(packets_text) if packets_text.isdigit() else 0
         units = int(units_text) if units_text.isdigit() else 0
-        total = packets * units
-        self.total_stock_label.setText(str(total))
-        return total
+
+        total_units = packets * units
+
+        self.total_stock_label.setText(str(total_units))
+
+        packet_price = self.packet_price_input.value()
+
+        if units > 0:
+            unit_price = packet_price / units
+        else:
+            unit_price = 0
+
+        inventory_cost = packet_price * packets
+
+        self.unit_price_label.setText(f"₹{unit_price:.2f}")
+
+        self.inventory_cost_label.setText(
+            f"₹{inventory_cost:.2f}"
+        )
+
+        return total_units
 
     def validate_and_accept(self):
         if not self.name_input.text().strip():
             QMessageBox.warning(self, "Missing Name", "Please enter the medicine name.")
             return
-        if not self.batch_input.text().strip():
-            QMessageBox.warning(self, "Missing Batch Number", "Please enter the batch number.")
-            return
-        if not self.seller_input.currentText().strip():
-            QMessageBox.warning(
-                self, "Missing Seller",
-                "Please enter or select the seller/distributor name.",
-            )
-            return
+        expiry = self.expiry_input.text().strip()
+        if expiry.replace("/", "").strip() == "":
+            expiry = ""
+
+        if expiry:
+
+            try:
+
+                month, year = expiry.split("/")
+
+                month = int(month)
+
+                year = int(year)
+
+                if month < 1 or month > 12:
+
+                    raise ValueError
+                if year < 0 or year > 99:
+                    raise ValueError
+
+            except:
+
+                QMessageBox.warning(
+                    self,
+                    "Invalid Expiry",
+                    "Use MM/YY format.\nExample: 06/27"
+                )
+                return
         self.accept()
 
     def get_values(self):
+        expiry = self.expiry_input.text().strip()
+        if expiry.replace("/", "").strip() == "":
+            expiry = ""
+        expiry_date = None
+
+        if expiry:
+            month, year = expiry.split("/")
+            expiry_date = f"20{year}-{month}-01"
+            
         values = {
             "name": self.name_input.text().strip(),
-            "batch_no": self.batch_input.text().strip(),
-            "expiry_date": self.expiry_input.date().toString("yyyy-MM-dd"),
-            "price": self.price_input.value(),
-            "seller_name": self.seller_input.currentText().strip(),
+            "batch_no": self.batch_input.text().strip() or None,
+            "expiry_date": expiry_date,
+            "packet_price": self.packet_price_input.value(),
+            "seller_name": self.seller_input.currentText().strip() or None,
         }
+        if self.medicine is not None:
+            self.stock_input.interpretText()
+            values["stock"] = self.stock_input.value()
         if self.packets_input is not None:
             # force-resolve any in-progress typed text before reading the final value
             self.packets_input.interpretText()
